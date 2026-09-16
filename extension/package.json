@@ -2,7 +2,7 @@
   "name": "poketokenbar",
   "displayName": "PokeTokenBar",
   "description": "AI coding tool usage in your status bar",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "publisher": "kalmanbalint",
   "private": true,
   "license": "MIT",

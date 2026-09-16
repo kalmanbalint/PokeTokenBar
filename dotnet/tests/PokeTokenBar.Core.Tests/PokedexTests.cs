@@ -292,6 +292,31 @@ public sealed class SpeciesLibraryTests
     }
 
     [Fact]
+    public async Task DrawsFromACachedIndexWhoseEntriesHaveNoName()
+    {
+        // A cached base-index written by a build before BaseSpecies carried a name has no name
+        // field, and a source-generated deserialiser does not run the `= string.Empty`
+        // initialiser, so Name comes back null. Seeding names from that index must skip the
+        // null rather than dereferencing it — otherwise every draw throws and no egg can be
+        // taken. The offline handler proves the draw survives on the cache alone.
+        using var directory = new TempPokedexDirectory();
+        var nameless = """
+            {"fetchedAt":"2026-09-10T10:01:00+00:00","entries":[
+              {"id":1,"captureRate":45,"isLegendary":false,"isMythical":false},
+              {"id":4,"captureRate":45,"isLegendary":false,"isMythical":false},
+              {"id":7,"captureRate":45,"isLegendary":false,"isMythical":false},
+              {"id":10,"captureRate":255,"isLegendary":false,"isMythical":false}
+            ]}
+            """;
+        System.IO.File.WriteAllText(System.IO.Path.Combine(directory.Path, "base-index.json"), nameless);
+        var library = new SpeciesLibrary(new PokeApiClient(new HttpClient(new OfflineHandler())), directory.Path);
+
+        var line = await library.DrawAsync(553524739);
+
+        Assert.NotEmpty(line.SpeciesPath);
+    }
+
+    [Fact]
     public async Task TheSameSeedDrawsTheSameLine()
     {
         using var directory = new TempPokedexDirectory();

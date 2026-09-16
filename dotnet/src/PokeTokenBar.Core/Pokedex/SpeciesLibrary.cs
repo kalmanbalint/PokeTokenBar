@@ -269,7 +269,7 @@ public sealed class SpeciesLibrary
 
         foreach (var (id, name) in learned)
         {
-            if (id < 1 || name.Length == 0)
+            if (id < 1 || string.IsNullOrEmpty(name))
             {
                 continue;
             }
