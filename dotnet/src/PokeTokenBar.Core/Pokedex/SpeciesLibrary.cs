@@ -27,55 +27,132 @@ public sealed class SpeciesLibrary
         _directory = directory ?? SysIO.Path.Combine(AppPaths.DataRoot, "pokedex");
     }
 
-    /// <summary>Draws a line for <paramref name="seed"/>, persisted so a restart cannot redraw.</summary>
-    public async ValueTask<EvolutionLine> DrawAsync(int seed, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Most species considered for one draw before settling for a line already completed. Every
+    /// rejected candidate was drawn before, so its chain is normally a cache hit.
+    /// </summary>
+    private const int MaxDrawAttempts = 32;
+
+    /// <summary>
+    /// Draws a line for <paramref name="seed"/>, persisted so a restart cannot redraw, skipping
+    /// lines already carried to their final form.
+    /// </summary>
+    /// <param name="seed">The egg's seed; the same seed and history always draw the same line.</param>
+    /// <param name="completed">
+    /// Final forms of every completed line. A species stays drawable while any of its branches
+    /// ends outside this set, and the branch drawn is one of those.
+    /// </param>
+    /// <param name="cancellationToken">Cancels any network fetch the draw needs.</param>
+    /// <remarks>
+    /// A completed line is only recognised once its chain is known, so with no network and no
+    /// cache a repeat is still possible. Once every line in reach is completed, repeats are
+    /// allowed rather than refusing to hatch.
+    /// </remarks>
+    public async ValueTask<EvolutionLine> DrawAsync(
+        int seed,
+        IReadOnlyCollection<int> completed,
+        CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(completed);
+
         var index = await LoadIndexAsync(cancellationToken).ConfigureAwait(false);
         if (index.Count == 0)
         {
-            return EvolutionLines.FromSeed(seed);
+            return EvolutionLines.FromSeed(seed, completed);
         }
 
-        var species = Pick(index, seed);
-        var paths = await LoadPathsAsync(species.Id, cancellationToken).ConfigureAwait(false);
+        var done = completed.ToHashSet();
+        var rejected = new HashSet<int>();
+        EvolutionLine? fallback = null;
 
-        if (paths.Count == 0)
+        for (var attempt = 0; attempt < MaxDrawAttempts; attempt++)
         {
-            // The species is real but its chain did not resolve. Keep it, and mark the path
-            // unresolved so a later refresh can extend it rather than leaving a three-form
-            // species permanently stuck as single-form.
-            return new EvolutionLine
+            var species = Pick(index, Redraw(seed, attempt), rejected);
+            if (species is null)
             {
-                SpeciesPath = [species.Id],
-                Rarity = species.Rarity,
-                Resolved = false,
-            };
+                break;
+            }
+
+            var paths = await LoadPathsAsync(species.Id, cancellationToken).ConfigureAwait(false);
+            var line = paths.Count == 0
+                ? Unresolved(species)
+                : new EvolutionLine { SpeciesPath = ChoosePath(paths, seed, done), Rarity = species.Rarity };
+
+            fallback ??= line;
+
+            var finished = paths.Count == 0
+                ? done.Contains(species.Id)
+                : paths.All(path => done.Contains(path[^1]));
+            if (!finished)
+            {
+                return line;
+            }
+
+            rejected.Add(species.Id);
         }
 
-        // A branching chain (Eevee) picks a branch from the same seed, so the choice is stable
-        // across restarts for the same companion.
-        var path = paths[(int)((uint)(seed >> 8) % (uint)paths.Count)];
-        return new EvolutionLine { SpeciesPath = path, Rarity = species.Rarity };
+        return fallback ?? EvolutionLines.FromSeed(seed, completed);
     }
 
     /// <summary>
     /// Re-resolves a line whose chain was previously unavailable, returning null when it still
     /// cannot be resolved or when the species genuinely has no evolutions.
     /// </summary>
+    /// <param name="completed">Final forms of completed lines, so a branch still open is preferred.</param>
     public async ValueTask<EvolutionLine?> ResolveAsync(
         int baseSpeciesId,
         Rarity rarity,
         int seed,
+        IReadOnlyCollection<int> completed,
         CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(completed);
+
         var paths = await LoadPathsAsync(baseSpeciesId, cancellationToken).ConfigureAwait(false);
         if (paths.Count == 0)
         {
             return null;
         }
 
-        var path = paths[(int)((uint)(seed >> 8) % (uint)paths.Count)];
+        var path = ChoosePath(paths, seed, completed.ToHashSet());
         return new EvolutionLine { SpeciesPath = path, Rarity = rarity, Resolved = true };
+    }
+
+    /// <remarks>
+    /// The species is real but its chain did not resolve. It is kept, marked unresolved, so a
+    /// later refresh can extend it rather than leaving a three-form species stuck as single-form.
+    /// </remarks>
+    private static EvolutionLine Unresolved(BaseSpecies species) => new()
+    {
+        SpeciesPath = [species.Id],
+        Rarity = species.Rarity,
+        Resolved = false,
+    };
+
+    /// <summary>
+    /// A branch chosen from the egg's own seed, so the choice is stable across restarts, and
+    /// from the branches not yet completed when any remain.
+    /// </summary>
+    private static int[] ChoosePath(IReadOnlyList<int[]> paths, int seed, HashSet<int> completed)
+    {
+        var open = paths.Where(path => !completed.Contains(path[^1])).ToArray();
+        var candidates = open.Length > 0 ? open : [.. paths];
+        return candidates[(int)((uint)(seed >> 8) % (uint)candidates.Length)];
+    }
+
+    /// <summary>The seed itself first, so a draw that finds nothing completed is unchanged.</summary>
+    private static int Redraw(int seed, int attempt)
+    {
+        if (attempt == 0)
+        {
+            return seed;
+        }
+
+        unchecked
+        {
+            var mixed = (seed ^ (attempt * 0x45D9F3B)) * 0x27D4EB2D;
+            return mixed ^ (mixed >> 15);
+        }
     }
 
     /// <summary>
@@ -158,14 +235,20 @@ public sealed class SpeciesLibrary
     /// Weighted so rarer species stay rare. A uniform draw over the index made legendaries
     /// roughly one draw in seven, because generations I to V hold dozens of them.
     /// </summary>
-    private static BaseSpecies Pick(IReadOnlyList<BaseSpecies> index, int seed)
+    /// <returns>Null when every species is excluded.</returns>
+    private static BaseSpecies? Pick(IReadOnlyList<BaseSpecies> index, int seed, HashSet<int> excluded)
     {
         var weights = new int[index.Count];
         var total = 0L;
         for (var i = 0; i < index.Count; i++)
         {
-            weights[i] = Weight(index[i].Rarity);
+            weights[i] = excluded.Contains(index[i].Id) ? 0 : Weight(index[i].Rarity);
             total += weights[i];
+        }
+
+        if (total == 0)
+        {
+            return null;
         }
 
         var point = (long)((ulong)(uint)seed % (ulong)total);
@@ -178,7 +261,7 @@ public sealed class SpeciesLibrary
             }
         }
 
-        return index[0];
+        return null;
     }
 
     private static int Weight(Rarity rarity) => rarity switch

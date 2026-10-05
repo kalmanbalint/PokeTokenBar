@@ -42,9 +42,23 @@ public static class EvolutionLines
     /// Picks a line from a seed. Deterministic on purpose: the seed is persisted at hatch, so a
     /// companion survives a restart instead of being redrawn into a different species.
     /// </summary>
-    public static EvolutionLine FromSeed(int seed)
+    /// <param name="seed">The egg's seed.</param>
+    /// <param name="completed">
+    /// Final forms of completed lines. Lines ending in one are skipped until every line has
+    /// been completed, after which any may repeat.
+    /// </param>
+    public static EvolutionLine FromSeed(int seed, IReadOnlyCollection<int> completed)
     {
-        var weights = All.Select(static line => Weight(line.Rarity)).ToArray();
+        ArgumentNullException.ThrowIfNull(completed);
+
+        var weights = All
+            .Select(line => completed.Contains(line.SpeciesPath[^1]) ? 0 : Weight(line.Rarity))
+            .ToArray();
+        if (weights.Sum() == 0)
+        {
+            weights = [.. All.Select(static line => Weight(line.Rarity))];
+        }
+
         var total = weights.Sum();
         var point = (int)((uint)seed % (uint)total);
 

@@ -285,7 +285,7 @@ public sealed class SpeciesLibraryTests
         using var directory = new TempPokedexDirectory();
         var library = new SpeciesLibrary(new PokeApiClient(new HttpClient(new OfflineHandler())), directory.Path);
 
-        var line = await library.DrawAsync(12345);
+        var line = await library.DrawAsync(12345, []);
 
         Assert.NotEmpty(line.SpeciesPath);
         Assert.Contains(line, EvolutionLines.All);
@@ -311,7 +311,7 @@ public sealed class SpeciesLibraryTests
         System.IO.File.WriteAllText(System.IO.Path.Combine(directory.Path, "base-index.json"), nameless);
         var library = new SpeciesLibrary(new PokeApiClient(new HttpClient(new OfflineHandler())), directory.Path);
 
-        var line = await library.DrawAsync(553524739);
+        var line = await library.DrawAsync(553524739, []);
 
         Assert.NotEmpty(line.SpeciesPath);
     }
@@ -322,8 +322,8 @@ public sealed class SpeciesLibraryTests
         using var directory = new TempPokedexDirectory();
         var library = new SpeciesLibrary(new PokeApiClient(new HttpClient(new OfflineHandler())), directory.Path);
 
-        var first = await library.DrawAsync(999);
-        var second = await library.DrawAsync(999);
+        var first = await library.DrawAsync(999, []);
+        var second = await library.DrawAsync(999, []);
 
         Assert.Equal(first.SpeciesPath, second.SpeciesPath);
     }
@@ -337,7 +337,7 @@ public sealed class SpeciesLibraryTests
         var handler = new SingleResponseHandler(body);
         var library = new SpeciesLibrary(new PokeApiClient(new HttpClient(handler)), directory.Path);
 
-        await library.DrawAsync(1);
+        await library.DrawAsync(1, []);
 
         Assert.False(library.HasCachedIndex);
     }
@@ -407,6 +407,131 @@ public sealed class SpeciesLibraryTests
             new PokeApiClient(new HttpClient(new OfflineHandler())),
             directory.Path);
         Assert.Equal([92, 93, 94], await offline.LineageOfAsync(94));
+    }
+
+    [Fact]
+    public async Task NeverRedrawsALinearLineAlreadyCompleted()
+    {
+        // Reported: a Spheal hatched after Walrein had already graduated. Seed 0 lands on the
+        // first entry, so the first assertion proves the draw really was headed for Spheal.
+        using var directory = new TempPokedexDirectory();
+        CacheIndex(directory, 363, 1);
+        CacheChain(directory, 363, [363, 364, 365]);
+        CacheChain(directory, 1, [1, 2, 3]);
+        var library = OfflineLibrary(directory);
+
+        Assert.Equal([363, 364, 365], (await library.DrawAsync(0, [])).SpeciesPath);
+
+        for (var seed = 0; seed < 200; seed++)
+        {
+            Assert.Equal([1, 2, 3], (await library.DrawAsync(seed, [365])).SpeciesPath);
+        }
+    }
+
+    [Fact]
+    public async Task KeepsABranchingLineDrawableUntilEveryBranchIsCompleted()
+    {
+        using var directory = new TempPokedexDirectory();
+        CacheIndex(directory, 133, 1);
+        CacheChain(directory, 133, [133, 134], [133, 135], [133, 136]);
+        CacheChain(directory, 1, [1, 2, 3]);
+        var library = OfflineLibrary(directory);
+
+        var eevees = 0;
+        for (var seed = 0; seed < 200; seed++)
+        {
+            var line = await library.DrawAsync(seed, [134, 135]);
+            if (line.SpeciesPath[0] == 133)
+            {
+                eevees++;
+                Assert.Equal([133, 136], line.SpeciesPath);
+            }
+        }
+
+        Assert.True(eevees > 0, "an Eevee with a branch left open should still be drawn");
+
+        for (var seed = 0; seed < 200; seed++)
+        {
+            Assert.Equal([1, 2, 3], (await library.DrawAsync(seed, [134, 135, 136])).SpeciesPath);
+        }
+    }
+
+    [Fact]
+    public async Task NeverRedrawsACompletedSpeciesWhoseChainIsUnknown()
+    {
+        // A single-form line graduated while its chain never resolved: its id is all there is.
+        using var directory = new TempPokedexDirectory();
+        CacheIndex(directory, 128, 1);
+        CacheChain(directory, 1, [1, 2, 3]);
+        var library = OfflineLibrary(directory);
+
+        Assert.Equal([128], (await library.DrawAsync(0, [])).SpeciesPath);
+        Assert.Equal([1, 2, 3], (await library.DrawAsync(0, [128])).SpeciesPath);
+    }
+
+    [Fact]
+    public async Task StillHatchesOnceEveryLineIsCompleted()
+    {
+        using var directory = new TempPokedexDirectory();
+        CacheIndex(directory, 363, 1);
+        CacheChain(directory, 363, [363, 364, 365]);
+        CacheChain(directory, 1, [1, 2, 3]);
+        var library = OfflineLibrary(directory);
+
+        var line = await library.DrawAsync(0, [3, 365]);
+
+        Assert.Equal([363, 364, 365], line.SpeciesPath);
+    }
+
+    [Fact]
+    public async Task TheOfflineFallbackSkipsCompletedLinesToo()
+    {
+        using var directory = new TempPokedexDirectory();
+        var library = OfflineLibrary(directory);
+        var everyFinal = EvolutionLines.All.Select(static line => line.SpeciesPath[^1]).ToArray();
+
+        for (var seed = 0; seed < 500; seed++)
+        {
+            Assert.NotEqual(3, (await library.DrawAsync(seed, [3])).SpeciesPath[^1]);
+        }
+
+        Assert.NotEmpty((await library.DrawAsync(0, everyFinal)).SpeciesPath);
+    }
+
+    [Fact]
+    public async Task ResolvingALateChainPrefersABranchStillOpen()
+    {
+        using var directory = new TempPokedexDirectory();
+        CacheChain(directory, 133, [133, 134], [133, 135], [133, 136]);
+        var library = OfflineLibrary(directory);
+
+        for (var seed = 0; seed < 50; seed++)
+        {
+            var line = await library.ResolveAsync(133, Rarity.Uncommon, seed, [134, 136]);
+            Assert.Equal([133, 135], line!.SpeciesPath);
+        }
+    }
+
+    private static SpeciesLibrary OfflineLibrary(TempPokedexDirectory directory) =>
+        new(new PokeApiClient(new HttpClient(new OfflineHandler())), directory.Path);
+
+    /// <summary>Common-rarity entries, so seed 0 draws the first.</summary>
+    private static void CacheIndex(TempPokedexDirectory directory, params int[] ids)
+    {
+        var entries = string.Join(
+            ",",
+            ids.Select(id => $$"""{"id":{{id}},"captureRate":255,"isLegendary":false,"isMythical":false}"""));
+        System.IO.File.WriteAllText(
+            System.IO.Path.Combine(directory.Path, "base-index.json"),
+            $$"""{"fetchedAt":"2026-10-05T00:00:00+00:00","entries":[{{entries}}]}""");
+    }
+
+    private static void CacheChain(TempPokedexDirectory directory, int baseId, params int[][] paths)
+    {
+        var json = string.Join(",", paths.Select(static path => "[" + string.Join(",", path) + "]"));
+        System.IO.File.WriteAllText(
+            System.IO.Path.Combine(directory.Path, $"chain-{baseId}.json"),
+            $$"""{"baseSpeciesId":{{baseId}},"paths":[{{json}}]}""");
     }
 
     private sealed class OfflineHandler : HttpMessageHandler

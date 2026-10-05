@@ -37,7 +37,7 @@ public sealed class EvolutionLinesTests
         // A restart must not redraw a different species.
         for (var seed = 0; seed < 500; seed += 37)
         {
-            Assert.Equal(EvolutionLines.FromSeed(seed), EvolutionLines.FromSeed(seed));
+            Assert.Equal(EvolutionLines.FromSeed(seed, []), EvolutionLines.FromSeed(seed, []));
         }
     }
 
@@ -46,8 +46,8 @@ public sealed class EvolutionLinesTests
     {
         foreach (var seed in new[] { int.MinValue, -1, 0, 1, int.MaxValue })
         {
-            Assert.NotNull(EvolutionLines.FromSeed(seed));
-            Assert.NotEmpty(EvolutionLines.FromSeed(seed).SpeciesPath);
+            Assert.NotNull(EvolutionLines.FromSeed(seed, []));
+            Assert.NotEmpty(EvolutionLines.FromSeed(seed, []).SpeciesPath);
         }
     }
 
@@ -57,7 +57,7 @@ public sealed class EvolutionLinesTests
         var counts = new Dictionary<Rarity, int>();
         for (var seed = 0; seed < 20_000; seed++)
         {
-            var rarity = EvolutionLines.FromSeed(seed).Rarity;
+            var rarity = EvolutionLines.FromSeed(seed, []).Rarity;
             counts[rarity] = counts.GetValueOrDefault(rarity) + 1;
         }
 

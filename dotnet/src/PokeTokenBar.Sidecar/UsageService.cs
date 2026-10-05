@@ -108,7 +108,7 @@ internal sealed class UsageService : IUsageService
         // The egg hatches on purchase, so the species is drawn here rather than incubated. The
         // draw needs the network, which is why the keeper hands back a seed instead of a line.
         var line = await _library
-            .DrawAsync(spend.ChosenSeed!.Value, cancellationToken)
+            .DrawAsync(spend.ChosenSeed!.Value, spend.State.Graduated, cancellationToken)
             .ConfigureAwait(false);
 
         var hatched = spend.State.WithLine(line);
@@ -220,7 +220,7 @@ internal sealed class UsageService : IUsageService
         }
 
         var resolved = await _library
-            .ResolveAsync(state.SpeciesPath[0], state.Rarity, state.Seed, cancellationToken)
+            .ResolveAsync(state.SpeciesPath[0], state.Rarity, state.Seed, state.Graduated, cancellationToken)
             .ConfigureAwait(false);
 
         return resolved is null ? state : state.WithResolvedPath(resolved);

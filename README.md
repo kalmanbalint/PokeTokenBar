@@ -119,7 +119,8 @@ The sidecar is a stdio JSON-RPC server, so running it by hand just waits for a c
 Today's token total in the status bar, and a sidebar companion that evolves as you spend tokens:
 a line is drawn, fed by your usage, and advances through its forms toward graduation. A common
 line graduates at 750M tokens and a legendary one at 6B — calibrated against a measured average
-of roughly 253M tokens a day.
+of roughly 253M tokens a day. A line you have already graduated is not drawn again; a branching
+one such as Eevee stays in the pool until every branch has been raised.
 
 Cost is an estimate of what those tokens would bill at published API rates, matching `ccusage`.
 It is **not** what a subscription charges.
