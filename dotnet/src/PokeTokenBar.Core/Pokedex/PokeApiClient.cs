@@ -206,23 +206,9 @@ public sealed class PokeApiClient(HttpClient? client = null)
         List<int[]> paths,
         Dictionary<int, string> names)
     {
-        var id = node.TryGetProperty("species", out var species)
-                 && species.TryGetProperty("url", out var url)
-                 && url.ValueKind == JsonValueKind.String
-            ? TrailingId(url.GetString())
-            : null;
-
-        // A species outside the sprite range ends the usable path rather than discarding it.
-        // Teddiursa -> Ursaring -> Ursaluna is chain 110, and Ursaluna is 901: dropping the
-        // whole branch would leave Teddiursa looking like a single-form species. Every
-        // generation I-V line whose evolution was added later has this shape.
-        if (id is null or < 1 || id > MaxSpeciesId)
+        var id = InRangeSpeciesId(node);
+        if (id is null)
         {
-            if (prefix.Count > 0)
-            {
-                paths.Add([.. prefix]);
-            }
-
             return;
         }
 
@@ -237,25 +223,36 @@ public sealed class PokeApiClient(HttpClient? client = null)
 
         var path = new List<int>(prefix) { id.Value };
 
-        if (!node.TryGetProperty("evolves_to", out var next)
-            || next.ValueKind != JsonValueKind.Array
-            || next.GetArrayLength() == 0)
+        // An evolution outside the sprite range is dropped, and the line ends here only when no
+        // evolution is left. Teddiursa -> Ursaring -> Ursaluna (901) keeps [216, 217] rather than
+        // losing the line; Meowth -> Persian | Perrserker (863) keeps [52, 53] alone, because
+        // also emitting [52] would offer Meowth as a single-form branch of its own.
+        var children = node.TryGetProperty("evolves_to", out var next) && next.ValueKind == JsonValueKind.Array
+            ? next.EnumerateArray().Where(static child => InRangeSpeciesId(child) is not null).ToArray()
+            : [];
+
+        // The depth cap guards against a cyclic or absurdly deep chain from malformed data.
+        if (children.Length == 0 || path.Count >= 8)
         {
             paths.Add([.. path]);
             return;
         }
 
-        // Guard against a cyclic or absurdly deep chain from malformed data.
-        if (path.Count >= 8)
-        {
-            paths.Add([.. path]);
-            return;
-        }
-
-        foreach (var child in next.EnumerateArray())
+        foreach (var child in children)
         {
             Walk(child, path, paths, names);
         }
+    }
+
+    private static int? InRangeSpeciesId(JsonElement node)
+    {
+        var id = node.TryGetProperty("species", out var species)
+                 && species.TryGetProperty("url", out var url)
+                 && url.ValueKind == JsonValueKind.String
+            ? TrailingId(url.GetString())
+            : null;
+
+        return id is >= 1 and <= MaxSpeciesId ? id : null;
     }
 
     private async ValueTask<JsonDocument?> ReadJsonAsync(

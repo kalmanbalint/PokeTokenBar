@@ -112,6 +112,17 @@ public sealed record CompanionState
     /// </remarks>
     public bool PokedexBackfilled { get; init; }
 
+    /// <summary>
+    /// True once a single-form path has been sent back for re-resolution.
+    /// </summary>
+    /// <remarks>
+    /// A one-time migration. The chain walker used to offer a branching species alone as a
+    /// branch of its own whenever a sibling evolution was outside the sprite range, so a Meowth
+    /// could hatch as [52] and be marked resolved. Every such path is a single form, so each
+    /// single-form path is resolved once more; a genuine one resolves to itself.
+    /// </remarks>
+    public bool SingleFormPathsRechecked { get; init; }
+
     /// <summary>Lines carried all the way to their final form.</summary>
     public required IReadOnlyList<int> Graduated { get; init; }
 
@@ -145,6 +156,7 @@ public sealed record CompanionState
         Rarity = Rarity.Common,
         Seed = seed,
         PathResolved = false,
+        SingleFormPathsRechecked = true,
         WatermarkDay = string.Empty,
         WatermarkTokens = 0,
         Pokedex = [],
@@ -246,6 +258,8 @@ public sealed record CompanionState
             LegacyBudget = 0,
             OfferSeeds = offer,
             SpeciesPath = path,
+            PathResolved = PathResolved && (SingleFormPathsRechecked || path.Length != 1),
+            SingleFormPathsRechecked = true,
             StageIndex = path.Length == 0 ? 0 : Math.Clamp(StageIndex, 0, path.Length - 1),
             TokensAtStage = Math.Clamp(TokensAtStage, 0, PokemonBalance.GraduationTotal(Rarity)),
             WatermarkTokens = Math.Max(0, WatermarkTokens),

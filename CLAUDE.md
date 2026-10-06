@@ -80,7 +80,9 @@ Inherited from the original plus found during the port. Check this list before s
 - **Verifying absence instead of presence.** A packaged artifact needs checking for what must be
   in it, not only for what must not.
 - **Silently truncated external data.** An out-of-range element should end a sequence, not
-  discard it; a failed fetch should be marked for retry, not persisted as fact.
+  discard it; a failed fetch should be marked for retry, not persisted as fact. In a tree, it
+  ends the sequence only when no in-range sibling remains — prune it, never cut its parent off
+  into a stub branch of its own.
 
 ## Never launch VS Code from a shell
 

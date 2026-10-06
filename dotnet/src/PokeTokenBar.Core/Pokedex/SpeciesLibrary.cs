@@ -421,7 +421,7 @@ public sealed class SpeciesLibrary
         var cached = ReadCache(file, PokedexJsonContext.Default.EvolutionPathsSnapshot);
         if (cached is { Paths.Count: > 0 })
         {
-            return cached.Paths;
+            return WithoutPrefixPaths(cached.Paths);
         }
 
         var chainId = await _api.GetChainIdAsync(speciesId, cancellationToken).ConfigureAwait(false);
@@ -444,6 +444,14 @@ public sealed class SpeciesLibrary
 
         return usable;
     }
+
+    /// <remarks>
+    /// A path that a longer one starts with is never a branch of its own, but caches already on
+    /// disk can hold one — Meowth as both [52, 53] and [52] — and would keep drawing Meowth as
+    /// a single-form line from it.
+    /// </remarks>
+    private static IReadOnlyList<int[]> WithoutPrefixPaths(IReadOnlyList<int[]> paths) =>
+        [.. paths.Where(path => !paths.Any(other => other.Length > path.Length && other.AsSpan().StartsWith(path)))];
 
     private static T? ReadCache<T>(string path, System.Text.Json.Serialization.Metadata.JsonTypeInfo<T> typeInfo)
         where T : class

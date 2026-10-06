@@ -210,7 +210,7 @@ public sealed class PokeApiClientTests
     }
 
     [Fact]
-    public async Task KeepsOnlyTheInRangePartOfABranchingChain()
+    public async Task DropsAnOutOfRangeBranchRatherThanOfferingTheRootAlone()
     {
         // Eevee: some branches are in range, others (Sylveon, 700) are not.
         var body = """
@@ -222,12 +222,44 @@ public sealed class PokeApiClientTests
 
         var chain = await new PokeApiClient(new HttpClient(new StubHandler(Json(body))))
             .GetEvolutionChainAsync(67);
-        var paths = chain.Paths;
 
-        Assert.Equal(2, paths.Count);
-        Assert.Equal([133, 134], paths[0]);
-        // The out-of-range branch degrades to the root alone rather than vanishing.
-        Assert.Equal([133], paths[1]);
+        Assert.Equal([133, 134], Assert.Single(chain.Paths));
+    }
+
+    [Fact]
+    public async Task KeepsMeowthTwoFormWhenItsGalarianBranchIsOutOfRange()
+    {
+        // Reported: a Meowth hatched as a one-form line. Chain 22 is Meowth -> Persian (53) or
+        // Perrserker (863), and the out-of-range branch used to become a path of [52] alone.
+        var body = """
+        {"chain":{"species":{"url":"https://pokeapi.co/api/v2/pokemon-species/52/"},"evolves_to":[
+          {"species":{"url":"https://pokeapi.co/api/v2/pokemon-species/53/"},"evolves_to":[]},
+          {"species":{"url":"https://pokeapi.co/api/v2/pokemon-species/863/"},"evolves_to":[]}
+        ]}}
+        """;
+
+        var chain = await new PokeApiClient(new HttpClient(new StubHandler(Json(body))))
+            .GetEvolutionChainAsync(22);
+
+        Assert.Equal([52, 53], Assert.Single(chain.Paths));
+    }
+
+    [Fact]
+    public async Task EndsAtABranchingSpeciesWhenEveryEvolutionIsOutOfRange()
+    {
+        var body = """
+        {"chain":{"species":{"url":"https://pokeapi.co/api/v2/pokemon-species/1/"},"evolves_to":[
+          {"species":{"url":"https://pokeapi.co/api/v2/pokemon-species/2/"},"evolves_to":[
+            {"species":{"url":"https://pokeapi.co/api/v2/pokemon-species/900/"},"evolves_to":[]},
+            {"species":{"url":"https://pokeapi.co/api/v2/pokemon-species/901/"},"evolves_to":[]}
+          ]}
+        ]}}
+        """;
+
+        var chain = await new PokeApiClient(new HttpClient(new StubHandler(Json(body))))
+            .GetEvolutionChainAsync(1);
+
+        Assert.Equal([1, 2], Assert.Single(chain.Paths));
     }
 
     private static HttpResponseMessage Json(string body)
@@ -510,6 +542,51 @@ public sealed class SpeciesLibraryTests
             var line = await library.ResolveAsync(133, Rarity.Uncommon, seed, [134, 136]);
             Assert.Equal([133, 135], line!.SpeciesPath);
         }
+    }
+
+    [Fact]
+    public async Task NeverDrawsAStubBranchLeftInAnOlderCache()
+    {
+        // A cache written by the old chain walker holds Meowth as [52, 53] and as [52] alone.
+        // The branch is chosen from seed >> 8, so the seeds step past 256 to reach the stub.
+        using var directory = new TempPokedexDirectory();
+        CacheIndex(directory, 52, 1);
+        CacheChain(directory, 52, [52, 53], [52]);
+        CacheChain(directory, 1, [1, 2, 3]);
+        var library = OfflineLibrary(directory);
+
+        var meowths = 0;
+        for (var seed = 0; seed < 4096; seed += 64)
+        {
+            var line = await library.DrawAsync(seed, []);
+            if (line.SpeciesPath[0] == 52)
+            {
+                meowths++;
+                Assert.Equal([52, 53], line.SpeciesPath);
+            }
+        }
+
+        Assert.True(meowths > 0, "the draw never reached Meowth, so it proves nothing");
+    }
+
+    [Fact]
+    public async Task TreatsAStubBranchLeftInAnOlderCacheAsNoBranchAtAll()
+    {
+        // With Persian graduated, the stub was the only open branch, so every Meowth hatched
+        // single-form. Meowth is a finished line and the draw moves on.
+        using var directory = new TempPokedexDirectory();
+        CacheIndex(directory, 52, 1);
+        CacheChain(directory, 52, [52, 53], [52]);
+        CacheChain(directory, 1, [1, 2, 3]);
+        var library = OfflineLibrary(directory);
+
+        for (var seed = 0; seed < 200; seed++)
+        {
+            Assert.Equal([1, 2, 3], (await library.DrawAsync(seed, [53])).SpeciesPath);
+        }
+
+        var resolved = await library.ResolveAsync(52, Rarity.Common, 0, [53]);
+        Assert.Equal([52, 53], resolved!.SpeciesPath);
     }
 
     private static SpeciesLibrary OfflineLibrary(TempPokedexDirectory directory) =>

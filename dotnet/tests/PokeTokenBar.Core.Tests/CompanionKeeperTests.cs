@@ -623,6 +623,53 @@ public sealed class CompanionStoreTests
     }
 
     [Fact]
+    public void SendsASingleFormPathFromAnOlderSaveBackForResolution()
+    {
+        // Reported: a Meowth showing stage 1 / 1. The old chain walker could hand out [52] alone
+        // marked resolved, and nothing re-resolves a resolved path.
+        using var directory = new TempStoreDirectory();
+        File.WriteAllText(
+            directory.File,
+            """{"version":2,"speciesPath":[52],"stageIndex":0,"tokensAtStage":0,"rarity":"Common","seed":77,"pathResolved":true,"watermarkDay":"","watermarkTokens":0,"graduated":[]}""");
+
+        var loaded = new CompanionStore(directory.File).Load();
+
+        Assert.False(loaded.PathResolved);
+        Assert.True(loaded.SingleFormPathsRechecked);
+    }
+
+    [Fact]
+    public void LeavesAMultiFormPathFromAnOlderSaveResolved()
+    {
+        using var directory = new TempStoreDirectory();
+        File.WriteAllText(
+            directory.File,
+            """{"version":2,"speciesPath":[133,134],"stageIndex":0,"tokensAtStage":0,"rarity":"Uncommon","seed":77,"pathResolved":true,"watermarkDay":"","watermarkTokens":0,"graduated":[]}""");
+
+        Assert.True(new CompanionStore(directory.File).Load().PathResolved);
+    }
+
+    [Fact]
+    public void RechecksASingleFormPathOnlyOnce()
+    {
+        // A genuine single-form line resolves to itself; asking again on every load would
+        // re-resolve it on every refresh forever.
+        using var directory = new TempStoreDirectory();
+        var store = new CompanionStore(directory.File);
+        var rechecked = (GameStates.WithCompanion() with
+        {
+            SpeciesPath = [150],
+            PathResolved = true,
+            SingleFormPathsRechecked = false,
+        }).Sanitized();
+        Assert.False(rechecked.PathResolved);
+
+        store.Save(rechecked with { PathResolved = true });
+
+        Assert.True(store.Load().PathResolved);
+    }
+
+    [Fact]
     public void LeavesNoTemporaryFileBehind()
     {
         using var directory = new TempStoreDirectory();
